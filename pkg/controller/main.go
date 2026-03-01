@@ -32,6 +32,9 @@ import (
 	ssinformers "github.com/bitnami-labs/sealed-secrets/pkg/client/informers/externalversions"
 )
 
+// LeaderElectionLeaseName is the name of the Lease resource used for leader election.
+const LeaderElectionLeaseName = "sealed-secrets-controller.bitnami.com"
+
 var (
 	// Selector used to find existing public/private key pairs on startup.
 	keySelector = fields.OneTermEqualSelector(SealedSecretsKeyLabel, "active")
@@ -326,7 +329,7 @@ func Main(f *Flags, version string) error {
 	ns := myNamespace()
 	lock := &resourcelock.LeaseLock{
 		LeaseMeta: metav1.ObjectMeta{
-			Name:      "sealed-secrets-controller.bitnami.com",
+			Name:      LeaderElectionLeaseName,
 			Namespace: ns,
 		},
 		Client: client.CoordinationV1(),

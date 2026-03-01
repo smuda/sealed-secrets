@@ -19,6 +19,7 @@ import (
 
 	ssv1alpha1 "github.com/bitnami-labs/sealed-secrets/pkg/apis/sealedsecrets/v1alpha1"
 	ssclient "github.com/bitnami-labs/sealed-secrets/pkg/client/clientset/versioned"
+	controller "github.com/bitnami-labs/sealed-secrets/pkg/controller"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -75,7 +76,7 @@ var _ = Describe("leader election", func() {
 		// 2. Wait for lease to have a non-empty HolderIdentity
 		var holderIdentity string
 		Eventually(func() (string, error) {
-			lease, err := fullClient.CoordinationV1().Leases(*controllerNs).Get(ctx, "sealed-secrets-controller.bitnami.com", metav1.GetOptions{})
+			lease, err := fullClient.CoordinationV1().Leases(*controllerNs).Get(ctx, controller.LeaderElectionLeaseName, metav1.GetOptions{})
 			if err != nil {
 				return "", err
 			}
@@ -86,7 +87,7 @@ var _ = Describe("leader election", func() {
 		}, leaderTimeout, PollingInterval).ShouldNot(BeEmpty())
 
 		// Get the actual holder identity
-		lease, err := fullClient.CoordinationV1().Leases(*controllerNs).Get(ctx, "sealed-secrets-controller.bitnami.com", metav1.GetOptions{})
+		lease, err := fullClient.CoordinationV1().Leases(*controllerNs).Get(ctx, controller.LeaderElectionLeaseName, metav1.GetOptions{})
 		Expect(err).NotTo(HaveOccurred())
 		holderIdentity = *lease.Spec.HolderIdentity
 
@@ -222,7 +223,7 @@ var _ = Describe("leader election", func() {
 		var oldLeader string
 		Eventually(func() (string, error) {
 			lease, lErr := fullClient.CoordinationV1().Leases(*controllerNs).Get(
-				ctx, "sealed-secrets-controller.bitnami.com", metav1.GetOptions{})
+				ctx, controller.LeaderElectionLeaseName, metav1.GetOptions{})
 			if lErr != nil {
 				return "", lErr
 			}
@@ -233,7 +234,7 @@ var _ = Describe("leader election", func() {
 		}, failoverTimeout, PollingInterval).ShouldNot(BeEmpty())
 
 		lease, err := fullClient.CoordinationV1().Leases(*controllerNs).Get(
-			ctx, "sealed-secrets-controller.bitnami.com", metav1.GetOptions{})
+			ctx, controller.LeaderElectionLeaseName, metav1.GetOptions{})
 		Expect(err).NotTo(HaveOccurred())
 		oldLeader = *lease.Spec.HolderIdentity
 		fmt.Fprintf(GinkgoWriter, "Old leader: %s\n", oldLeader)
@@ -259,7 +260,7 @@ var _ = Describe("leader election", func() {
 		var newLeader string
 		Eventually(func() (string, error) {
 			lease, lErr := fullClient.CoordinationV1().Leases(*controllerNs).Get(
-				ctx, "sealed-secrets-controller.bitnami.com", metav1.GetOptions{})
+				ctx, controller.LeaderElectionLeaseName, metav1.GetOptions{})
 			if lErr != nil {
 				return "", lErr
 			}
@@ -271,7 +272,7 @@ var _ = Describe("leader election", func() {
 			SatisfyAll(Not(BeEmpty()), Not(Equal(oldLeader))))
 
 		lease, err = fullClient.CoordinationV1().Leases(*controllerNs).Get(
-			ctx, "sealed-secrets-controller.bitnami.com", metav1.GetOptions{})
+			ctx, controller.LeaderElectionLeaseName, metav1.GetOptions{})
 		Expect(err).NotTo(HaveOccurred())
 		newLeader = *lease.Spec.HolderIdentity
 		fmt.Fprintf(GinkgoWriter, "New leader: %s\n", newLeader)
