@@ -31,6 +31,23 @@ rules:
     verbs:
       - create
       - list
+  {{- if .Values.leaderElection.enabled }}
+  - apiGroups:
+      - coordination.k8s.io
+    resourceNames:
+      - sealed-secrets-controller.bitnami.com
+    resources:
+      - leases
+    verbs:
+      - get
+      - update
+  - apiGroups:
+      - coordination.k8s.io
+    resources:
+      - leases
+    verbs:
+      - create
+  {{- end }}
 ---
 {{- end }}
 {{- if and .Values.rbac.create .Values.rbac.serviceProxier.create }}

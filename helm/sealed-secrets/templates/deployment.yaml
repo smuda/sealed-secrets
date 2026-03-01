@@ -13,7 +13,7 @@ metadata:
     {{- include "sealed-secrets.render" ( dict "value" .Values.commonAnnotations "context" $ ) | nindent 4 }}
     {{- end }}
 spec:
-  replicas: 1
+  replicas: {{ if .Values.leaderElection.enabled }}{{ .Values.replicas }}{{ else }}1{{ end }}
   {{- if .Values.revisionHistoryLimit }}
   revisionHistoryLimit: {{ .Values.revisionHistoryLimit }}
   {{- end }}
@@ -160,10 +160,25 @@ spec:
             - --kubeclient-burst
             - {{ .Values.kubeClientBurst | quote }}
             {{- end }}
+            {{- if .Values.leaderElection.enabled }}
+            - --leader-elect
+            - --leader-elect-lease-duration
+            - {{ .Values.leaderElection.leaseDuration | quote }}
+            - --leader-elect-renew-deadline
+            - {{ .Values.leaderElection.renewDeadline | quote }}
+            - --leader-elect-retry-period
+            - {{ .Values.leaderElection.retryPeriod | quote }}
+            {{- end }}
           {{- end }}
           image: {{ printf "%s/%s:%s" .Values.image.registry .Values.image.repository .Values.image.tag }}
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           env:
+            {{- if .Values.leaderElection.enabled }}
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            {{- end }}
             {{- if (.Values.resources.limits).cpu }}
             - name: GOMAXPROCS
               valueFrom:

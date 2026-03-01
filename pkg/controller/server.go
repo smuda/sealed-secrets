@@ -29,15 +29,12 @@ type certProvider func() ([]*x509.Certificate, error)
 type secretChecker func([]byte) (bool, error)
 type secretRotator func([]byte) ([]byte, error)
 
-// httpserver starts an HTTP that exposes core functionality like serving the public key
-// or secret rotation and validation. This endpoint is designed to be accessible by
-// all users of a given cluster. It must not leak any secret material.
-// The server is started in the background and a handle to it returned so it can be shut down.
-func httpserver(cp certProvider, sc secretChecker, sr secretRotator, burst int, rate int) *http.Server {
-	httpRateLimiter := rateLimiter(burst, rate)
-
+// httpHealthServer starts a minimal HTTP server with only the /healthz endpoint.
+// This server is started for all pods (including non-leaders) so that health probes work.
+// The server is started in the background and a handle to it and its mux are returned
+// so additional routes can be added later and the server can be shut down.
+func httpHealthServer() (*http.Server, *http.ServeMux) {
 	mux := http.NewServeMux()
-
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		_, err := io.WriteString(w, "ok\n")
@@ -45,6 +42,28 @@ func httpserver(cp certProvider, sc secretChecker, sr secretRotator, burst int, 
 			log.Fatal(err)
 		}
 	})
+
+	server := http.Server{
+		Addr:              *listenAddr,
+		Handler:           mux,
+		ReadTimeout:       *readTimeout,
+		ReadHeaderTimeout: *readTimeout,
+		WriteTimeout:      *writeTimeout,
+	}
+
+	slog.Info("HTTP health server serving", "addr", server.Addr)
+	go func() {
+		err := server.ListenAndServe()
+		slog.Error("HTTP server exiting", "error", err)
+	}()
+	return &server, mux
+}
+
+// httpAddRoutes registers the core functionality routes on an existing mux: serving the
+// public key, secret rotation, and validation. These endpoints are designed to be accessible
+// by all users of a given cluster. They must not leak any secret material.
+func httpAddRoutes(mux *http.ServeMux, cp certProvider, sc secretChecker, sr secretRotator, burst int, rate int) {
+	httpRateLimiter := rateLimiter(burst, rate)
 
 	mux.Handle("/v1/verify", Instrument("/v1/verify", httpRateLimiter.RateLimit(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		content, err := io.ReadAll(r.Body)
@@ -102,21 +121,6 @@ func httpserver(cp certProvider, sc secretChecker, sr secretRotator, burst int, 
 			_, _ = w.Write(pem.EncodeToMemory(&pem.Block{Type: certUtil.CertificateBlockType, Bytes: cert.Raw}))
 		}
 	})))
-
-	server := http.Server{
-		Addr:              *listenAddr,
-		Handler:           mux,
-		ReadTimeout:       *readTimeout,
-		ReadHeaderTimeout: *readTimeout,
-		WriteTimeout:      *writeTimeout,
-	}
-
-	slog.Info("HTTP server serving", "addr", server.Addr)
-	go func() {
-		err := server.ListenAndServe()
-		slog.Error("HTTP server exiting", "error", err)
-	}()
-	return &server
 }
 
 func httpserverMetrics() *http.Server {

@@ -4,8 +4,10 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/x509"
+	"fmt"
 	"io"
 	"log/slog"
+	"net/http"
 	"os"
 	"os/signal"
 	"sort"
@@ -19,6 +21,8 @@ import (
 	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
+	"k8s.io/client-go/tools/leaderelection"
+	"k8s.io/client-go/tools/leaderelection/resourcelock"
 
 	"k8s.io/client-go/informers"
 
@@ -58,8 +62,12 @@ type Flags struct {
 	PrivateKeyLabels      string
 	MaxRetries            int
 	WatchForSecrets       bool
-	KubeClientQPS         float32
-	KubeClientBurst       int
+	KubeClientQPS                float32
+	KubeClientBurst              int
+	LeaderElect                  bool
+	LeaderElectLeaseDuration     time.Duration
+	LeaderElectRenewDeadline     time.Duration
+	LeaderElectRetryPeriod       time.Duration
 }
 
 func initKeyPrefix(keyPrefix string) (string, error) {
@@ -171,7 +179,7 @@ func initKeyRenewal(ctx context.Context, registry *KeyRegistry, period, validFor
 	return ScheduleJobWithTrigger(initialDelay, period, keyGenFunc), nil
 }
 
-func Main(f *Flags, version string) error {
+func run(ctx context.Context, f *Flags, version string, mux *http.ServeMux) error {
 	registerMetrics(version)
 
 	config, err := rest.InClusterConfig()
@@ -193,7 +201,6 @@ func Main(f *Flags, version string) error {
 	}
 
 	myNs := myNamespace()
-	ctx := context.Background()
 
 	prefix, err := initKeyPrefix(f.KeyPrefix)
 	if err != nil {
@@ -278,22 +285,97 @@ func Main(f *Flags, version string) error {
 		return []*x509.Certificate{cert}, nil
 	}
 
-	server := httpserver(cp, controller.AttemptUnseal, controller.Rotate, f.RateLimitBurst, f.RateLimitPerSecond)
-	serverMetrics := httpserverMetrics()
+	httpAddRoutes(mux, cp, controller.AttemptUnseal, controller.Rotate, f.RateLimitBurst, f.RateLimitPerSecond)
 
-	sigterm := make(chan os.Signal, 1)
-	signal.Notify(sigterm, syscall.SIGTERM)
-	<-sigterm
-
-	if err := server.Shutdown(context.Background()); err != nil {
-		return err
-	}
-
-	if err := serverMetrics.Shutdown(context.Background()); err != nil {
-		return err
+	select {
+	case <-ctx.Done():
+	case <-func() chan os.Signal {
+		sigterm := make(chan os.Signal, 1)
+		signal.Notify(sigterm, syscall.SIGTERM)
+		return sigterm
+	}():
 	}
 
 	return nil
+}
+
+func Main(f *Flags, version string) error {
+	if !f.LeaderElect {
+		server, mux := httpHealthServer()
+		serverMetrics := httpserverMetrics()
+		defer server.Shutdown(context.Background())
+		defer serverMetrics.Shutdown(context.Background())
+		return run(context.Background(), f, version, mux)
+	}
+
+	config, err := rest.InClusterConfig()
+	if err != nil {
+		return err
+	}
+
+	client, err := kubernetes.NewForConfig(config)
+	if err != nil {
+		return err
+	}
+
+	id, err := leaderIdentity()
+	if err != nil {
+		return fmt.Errorf("unable to determine leader identity: %w", err)
+	}
+
+	ns := myNamespace()
+	lock := &resourcelock.LeaseLock{
+		LeaseMeta: metav1.ObjectMeta{
+			Name:      "sealed-secrets-controller.bitnami.com",
+			Namespace: ns,
+		},
+		Client: client.CoordinationV1(),
+		LockConfig: resourcelock.ResourceLockConfig{
+			Identity: id,
+		},
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	server, mux := httpHealthServer()
+	serverMetrics := httpserverMetrics()
+	defer server.Shutdown(context.Background())
+	defer serverMetrics.Shutdown(context.Background())
+
+	var runErr error
+	leaderelection.RunOrDie(ctx, leaderelection.LeaderElectionConfig{
+		Lock:            lock,
+		LeaseDuration:   f.LeaderElectLeaseDuration,
+		RenewDeadline:   f.LeaderElectRenewDeadline,
+		RetryPeriod:     f.LeaderElectRetryPeriod,
+		ReleaseOnCancel: true,
+		Callbacks: leaderelection.LeaderCallbacks{
+			OnStartedLeading: func(ctx context.Context) {
+				slog.Info("Started leading")
+				if err := run(ctx, f, version, mux); err != nil {
+					runErr = err
+					cancel()
+				}
+			},
+			OnStoppedLeading: func() {
+				slog.Info("Stopped leading")
+				cancel()
+			},
+			OnNewLeader: func(identity string) {
+				slog.Info("New leader elected", "leader", identity)
+			},
+		},
+	})
+
+	return runErr
+}
+
+func leaderIdentity() (string, error) {
+	if name := os.Getenv("POD_NAME"); name != "" {
+		return name, nil
+	}
+	return os.Hostname()
 }
 
 func prepareController(

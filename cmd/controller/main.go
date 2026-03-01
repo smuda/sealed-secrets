@@ -66,6 +66,11 @@ func bindControllerFlags(f *controller.Flags, fs *flag.FlagSet) {
 
 	fs.Float32Var(&f.KubeClientQPS, "kubeclient-qps", 5, "Kubeclient QPS (negative value disables ratelimiting)")
 	fs.IntVar(&f.KubeClientBurst, "kubeclient-burst", 10, "Kubeclient Burst")
+
+	fs.BoolVar(&f.LeaderElect, "leader-elect", false, "Start a leader election client and gain leadership before executing the main loop.")
+	fs.DurationVar(&f.LeaderElectLeaseDuration, "leader-elect-lease-duration", 15*time.Second, "Duration that non-leader candidates will wait to force acquire leadership.")
+	fs.DurationVar(&f.LeaderElectRenewDeadline, "leader-elect-renew-deadline", 10*time.Second, "Duration that the acting leader will retry refreshing leadership before giving up.")
+	fs.DurationVar(&f.LeaderElectRetryPeriod, "leader-elect-retry-period", 2*time.Second, "Duration between each leader election action.")
 }
 
 func bindFlags(f *controller.Flags, fs *flag.FlagSet, gofs *goflag.FlagSet) {

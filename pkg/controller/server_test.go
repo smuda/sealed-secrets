@@ -52,7 +52,8 @@ func TestHttpCert(t *testing.T) {
 	}
 
 	cs := &testCertStore{}
-	server := httpserver(cs.getCert, nil, nil, 2, 2)
+	server, mux := httpHealthServer()
+	httpAddRoutes(mux, cs.getCert, nil, nil, 2, 2)
 	defer shutdownServer(server, t)
 	hp := *listenAddr
 	if strings.HasPrefix(hp, ":") {
@@ -60,6 +61,23 @@ func TestHttpCert(t *testing.T) {
 	}
 
 	time.Sleep(1 * time.Second) // TODO(mkm) find a better way, e.g. retries
+
+	// Verify the /healthz endpoint returns 200 with "ok\n"
+	healthResp, err := http.Get(fmt.Sprintf("http://%s/healthz", hp))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := healthResp.StatusCode, http.StatusOK; got != want {
+		t.Fatalf("healthz status: got %v, want %v", got, want)
+	}
+	healthBody, err := io.ReadAll(healthResp.Body)
+	healthResp.Body.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := string(healthBody), "ok\n"; got != want {
+		t.Fatalf("healthz body: got %q, want %q", got, want)
+	}
 
 	check := func(cert *x509.Certificate) {
 		resp, err := http.Get(fmt.Sprintf("http://%s/v1/cert.pem", hp))

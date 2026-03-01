@@ -124,6 +124,20 @@ kubeClientQPS: ""
 ## @param kubeClientBurst Kubeclient Burst
 ##
 kubeClientBurst: ""
+## @param replicas Number of controller replicas (only >1 with leaderElection.enabled)
+##
+replicas: 1
+## Leader election configuration
+## @param leaderElection.enabled Enable leader election for HA deployments
+## @param leaderElection.leaseDuration Duration that non-leader candidates will wait to force acquire leadership
+## @param leaderElection.renewDeadline Duration the acting leader will retry refreshing leadership before giving up
+## @param leaderElection.retryPeriod Duration between each leader election action
+##
+leaderElection:
+  enabled: false
+  leaseDuration: 15s
+  renewDeadline: 10s
+  retryPeriod: 2s
 ## @param command Override default container command
 ##
 command: []
