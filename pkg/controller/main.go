@@ -42,35 +42,35 @@ var (
 
 // Flags to configure the controller.
 type Flags struct {
-	KeyPrefix             string
-	KeySize               int
-	ValidFor              time.Duration
-	MyCN                  string
-	KeyRenewPeriod        time.Duration
-	KeyOrderPriority      string
-	AcceptV1Data          bool
-	KeyCutoffTime         string
-	NamespaceAll          bool
-	AdditionalNamespaces  string
-	LabelSelector         string
-	RateLimitPerSecond    int
-	RateLimitBurst        int
-	OldGCBehavior         bool
-	UpdateStatus          bool
-	SkipRecreate          bool
-	LogInfoToStdout       bool
-	LogLevel              string
-	LogFormat             string
-	PrivateKeyAnnotations string
-	PrivateKeyLabels      string
-	MaxRetries            int
-	WatchForSecrets       bool
-	KubeClientQPS                float32
-	KubeClientBurst              int
-	LeaderElect                  bool
-	LeaderElectLeaseDuration     time.Duration
-	LeaderElectRenewDeadline     time.Duration
-	LeaderElectRetryPeriod       time.Duration
+	KeyPrefix                string
+	KeySize                  int
+	ValidFor                 time.Duration
+	MyCN                     string
+	KeyRenewPeriod           time.Duration
+	KeyOrderPriority         string
+	AcceptV1Data             bool
+	KeyCutoffTime            string
+	NamespaceAll             bool
+	AdditionalNamespaces     string
+	LabelSelector            string
+	RateLimitPerSecond       int
+	RateLimitBurst           int
+	OldGCBehavior            bool
+	UpdateStatus             bool
+	SkipRecreate             bool
+	LogInfoToStdout          bool
+	LogLevel                 string
+	LogFormat                string
+	PrivateKeyAnnotations    string
+	PrivateKeyLabels         string
+	MaxRetries               int
+	WatchForSecrets          bool
+	KubeClientQPS            float32
+	KubeClientBurst          int
+	LeaderElect              bool
+	LeaderElectLeaseDuration time.Duration
+	LeaderElectRenewDeadline time.Duration
+	LeaderElectRetryPeriod   time.Duration
 }
 
 func initKeyPrefix(keyPrefix string) (string, error) {
