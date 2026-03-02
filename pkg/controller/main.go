@@ -182,7 +182,7 @@ func initKeyRenewal(ctx context.Context, registry *KeyRegistry, period, validFor
 	return ScheduleJobWithTrigger(initialDelay, period, keyGenFunc), nil
 }
 
-func run(ctx context.Context, f *Flags, version string, mux *http.ServeMux) error {
+func run(ctx context.Context, f *Flags, version string, mux *http.ServeMux, sharedKeyRegistry *KeyRegistry) error {
 	registerMetrics(version)
 
 	config, err := rest.InClusterConfig()
@@ -205,14 +205,19 @@ func run(ctx context.Context, f *Flags, version string, mux *http.ServeMux) erro
 
 	myNs := myNamespace()
 
-	prefix, err := initKeyPrefix(f.KeyPrefix)
-	if err != nil {
-		return err
-	}
+	var keyRegistry *KeyRegistry
+	if sharedKeyRegistry != nil {
+		keyRegistry = sharedKeyRegistry
+	} else {
+		prefix, err := initKeyPrefix(f.KeyPrefix)
+		if err != nil {
+			return err
+		}
 
-	keyRegistry, err := initKeyRegistry(ctx, clientset, rand.Reader, myNs, prefix, SealedSecretsKeyLabel, f.KeySize, f.KeyOrderPriority)
-	if err != nil {
-		return err
+		keyRegistry, err = initKeyRegistry(ctx, clientset, rand.Reader, myNs, prefix, SealedSecretsKeyLabel, f.KeySize, f.KeyOrderPriority)
+		if err != nil {
+			return err
+		}
 	}
 
 	var ct time.Time
@@ -308,7 +313,7 @@ func Main(f *Flags, version string) error {
 		serverMetrics := httpserverMetrics()
 		defer server.Shutdown(context.Background())
 		defer serverMetrics.Shutdown(context.Background())
-		return run(context.Background(), f, version, mux)
+		return run(context.Background(), f, version, mux, nil)
 	}
 
 	config, err := rest.InClusterConfig()
@@ -346,6 +351,44 @@ func Main(f *Flags, version string) error {
 	defer server.Shutdown(context.Background())
 	defer serverMetrics.Shutdown(context.Background())
 
+	// Initialize the key registry before leader election so that all pods
+	// have access to existing keys. The leader will reuse this registry
+	// when it starts run(), avoiding a redundant API call.
+	prefix, err := initKeyPrefix(f.KeyPrefix)
+	if err != nil {
+		return err
+	}
+
+	keyRegistry, err := initKeyRegistry(ctx, client, rand.Reader, ns, prefix, SealedSecretsKeyLabel, f.KeySize, f.KeyOrderPriority)
+	if err != nil {
+		return err
+	}
+
+	// Periodically reload keys from the K8s API so non-leader pods pick up
+	// keys created by the leader (e.g. on fresh deploy or after rotation).
+	go func() {
+		ticker := time.NewTicker(5 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				secretList, err := client.CoreV1().Secrets(ns).List(ctx, metav1.ListOptions{
+					LabelSelector: keySelector.String(),
+				})
+				if err != nil {
+					slog.Error("Failed to reload keys from API", "error", err)
+					continue
+				}
+				sort.Sort(ssv1alpha1.ByCreationTimestamp(secretList.Items))
+				for i := range secretList.Items {
+					_ = registryNewKeyWithSecret(&secretList.Items[i], keyRegistry, f.KeyOrderPriority)
+				}
+			}
+		}
+	}()
+
 	var runErr error
 	leaderelection.RunOrDie(ctx, leaderelection.LeaderElectionConfig{
 		Lock:            lock,
@@ -356,7 +399,7 @@ func Main(f *Flags, version string) error {
 		Callbacks: leaderelection.LeaderCallbacks{
 			OnStartedLeading: func(ctx context.Context) {
 				slog.Info("Started leading")
-				if err := run(ctx, f, version, mux); err != nil {
+				if err := run(ctx, f, version, mux, keyRegistry); err != nil {
 					runErr = err
 					cancel()
 				}
