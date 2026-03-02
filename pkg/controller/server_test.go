@@ -53,7 +53,8 @@ func TestHttpCert(t *testing.T) {
 
 	cs := &testCertStore{}
 	server, mux := httpHealthServer()
-	httpAddRoutes(mux, cs.getCert, nil, nil, 2, 2)
+	httpAddCertRoute(mux, cs.getCert)
+	httpAddRoutes(mux, nil, nil, 2, 2)
 	defer shutdownServer(server, t)
 	hp := *listenAddr
 	if strings.HasPrefix(hp, ":") {
@@ -111,4 +112,68 @@ func TestHttpCert(t *testing.T) {
 
 	cs.setCert(certAfter)
 	check(certAfter)
+}
+
+func TestHttpCertRouteIndependent(t *testing.T) {
+	validFor := time.Hour
+	cn := "my-cn"
+	_, cert, err := generatePrivateKeyAndCert(2048, validFor, cn)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cs := &testCertStore{}
+	cs.setCert(cert)
+
+	server, mux := httpHealthServer()
+	httpAddCertRoute(mux, cs.getCert)
+	defer shutdownServer(server, t)
+	hp := *listenAddr
+	if strings.HasPrefix(hp, ":") {
+		hp = fmt.Sprintf("localhost%s", hp)
+	}
+
+	time.Sleep(1 * time.Second) // TODO(mkm) find a better way, e.g. retries
+
+	// Verify the /healthz endpoint returns 200 with "ok\n"
+	healthResp, err := http.Get(fmt.Sprintf("http://%s/healthz", hp))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := healthResp.StatusCode, http.StatusOK; got != want {
+		t.Fatalf("healthz status: got %v, want %v", got, want)
+	}
+	healthBody, err := io.ReadAll(healthResp.Body)
+	healthResp.Body.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := string(healthBody), "ok\n"; got != want {
+		t.Fatalf("healthz body: got %q, want %q", got, want)
+	}
+
+	// Verify the /v1/cert.pem endpoint returns 200 with the expected certificate
+	resp, err := http.Get(fmt.Sprintf("http://%s/v1/cert.pem", hp))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := resp.StatusCode, http.StatusOK; got != want {
+		t.Fatalf("got: %v, want: %v", got, want)
+	}
+	defer resp.Body.Close()
+
+	b, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	certs, err := certUtil.ParseCertsPEM(b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := len(certs), 1; got != want {
+		t.Fatalf("got: %v, want: %v", got, want)
+	}
+	if got, want := certs[0], cert; !got.Equal(want) {
+		t.Fatalf("got: %v, want: %v", got, want)
+	}
 }

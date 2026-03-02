@@ -285,15 +285,18 @@ func run(ctx context.Context, f *Flags, version string, mux *http.ServeMux, shar
 		}
 	}
 
-	cp := func() ([]*x509.Certificate, error) {
-		cert, err := keyRegistry.getCert()
-		if err != nil {
-			return nil, err
+	// In LE mode, all routes are already registered in Main().
+	if sharedKeyRegistry == nil {
+		cp := func() ([]*x509.Certificate, error) {
+			cert, err := keyRegistry.getCert()
+			if err != nil {
+				return nil, err
+			}
+			return []*x509.Certificate{cert}, nil
 		}
-		return []*x509.Certificate{cert}, nil
+		httpAddCertRoute(mux, cp)
+		httpAddRoutes(mux, controller.AttemptUnseal, controller.Rotate, f.RateLimitBurst, f.RateLimitPerSecond)
 	}
-
-	httpAddRoutes(mux, cp, controller.AttemptUnseal, controller.Rotate, f.RateLimitBurst, f.RateLimitPerSecond)
 
 	select {
 	case <-ctx.Done():
@@ -352,8 +355,7 @@ func Main(f *Flags, version string) error {
 	defer serverMetrics.Shutdown(context.Background())
 
 	// Initialize the key registry before leader election so that all pods
-	// have access to existing keys. The leader will reuse this registry
-	// when it starts run(), avoiding a redundant API call.
+	// (including non-leaders) can serve the public certificate via /v1/cert.pem.
 	prefix, err := initKeyPrefix(f.KeyPrefix)
 	if err != nil {
 		return err
@@ -388,6 +390,22 @@ func Main(f *Flags, version string) error {
 			}
 		}
 	}()
+
+	cp := func() ([]*x509.Certificate, error) {
+		cert, err := keyRegistry.getCert()
+		if err != nil {
+			return nil, err
+		}
+		return []*x509.Certificate{cert}, nil
+	}
+	sc := func(content []byte) (bool, error) {
+		return checkSecret(content, keyRegistry)
+	}
+	sr := func(content []byte) ([]byte, error) {
+		return rotateSecret(content, keyRegistry)
+	}
+	httpAddCertRoute(mux, cp)
+	httpAddRoutes(mux, sc, sr, f.RateLimitBurst, f.RateLimitPerSecond)
 
 	var runErr error
 	leaderelection.RunOrDie(ctx, leaderelection.LeaderElectionConfig{

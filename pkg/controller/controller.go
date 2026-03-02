@@ -537,6 +537,24 @@ func formatImmutableError(key string) string {
 
 // AttemptUnseal tries to unseal a secret.
 func (c *Controller) AttemptUnseal(content []byte) (bool, error) {
+	return checkSecret(content, c.keyRegistry)
+}
+
+// Rotate takes a sealed secret and returns a sealed secret that has been encrypted
+// with the latest private key. If the secret is already encrypted with the latest,
+// returns the input.
+func (c *Controller) Rotate(content []byte) ([]byte, error) {
+	return rotateSecret(content, c.keyRegistry)
+}
+
+func (c *Controller) attemptUnseal(ss *ssv1alpha1.SealedSecret) (*corev1.Secret, error) {
+	return attemptUnseal(ss, c.keyRegistry)
+}
+
+// checkSecret verifies whether a sealed secret can be decrypted with the
+// given key registry. It is used both by the Controller method and as a
+// standalone handler for non-leader pods in LE mode.
+func checkSecret(content []byte, kr *KeyRegistry) (bool, error) {
 	if err := multidocyaml.EnsureNotMultiDoc(content); err != nil {
 		return false, err
 	}
@@ -548,7 +566,7 @@ func (c *Controller) AttemptUnseal(content []byte) (bool, error) {
 
 	switch s := object.(type) {
 	case *ssv1alpha1.SealedSecret:
-		if _, err := c.attemptUnseal(s); err != nil {
+		if _, err := attemptUnseal(s, kr); err != nil {
 			return false, nil
 		}
 		return true, nil
@@ -557,10 +575,10 @@ func (c *Controller) AttemptUnseal(content []byte) (bool, error) {
 	}
 }
 
-// Rotate takes a sealed secret and returns a sealed secret that has been encrypted
-// with the latest private key. If the secret is already encrypted with the latest,
-// returns the input.
-func (c *Controller) Rotate(content []byte) ([]byte, error) {
+// rotateSecret re-encrypts a sealed secret with the latest key from the
+// registry. It is used both by the Controller method and as a standalone
+// handler for non-leader pods in LE mode.
+func rotateSecret(content []byte, kr *KeyRegistry) ([]byte, error) {
 	object, err := runtime.Decode(scheme.Codecs.UniversalDecoder(ssv1alpha1.SchemeGroupVersion), content)
 	if err != nil {
 		return nil, err
@@ -568,18 +586,16 @@ func (c *Controller) Rotate(content []byte) ([]byte, error) {
 
 	switch s := object.(type) {
 	case *ssv1alpha1.SealedSecret:
-		// Verify metainformation is well set up in Template ObjectMeta and ObjectMeta to avoid unconsistences with the scope during the rotate.
-		// This is going to keep the original scope.
 		if !reflect.DeepEqual(s.ObjectMeta, s.Spec.Template.ObjectMeta) {
 			s.ObjectMeta.DeepCopyInto(&s.Spec.Template.ObjectMeta)
 			slog.Warn("Sealed Secret metadata doesn't match. Please align your Sealed Secret metadata")
 		}
 
-		secret, err := c.attemptUnseal(s)
+		secret, err := attemptUnseal(s, kr)
 		if err != nil {
 			return nil, fmt.Errorf("error decrypting secret. %v", err)
 		}
-		latestPrivKey := c.keyRegistry.latestPrivateKey()
+		latestPrivKey := kr.latestPrivateKey()
 		resealedSecret, err := ssv1alpha1.NewSealedSecret(scheme.Codecs, &latestPrivKey.PublicKey, secret)
 		if err != nil {
 			return nil, fmt.Errorf("error creating new sealed secret. %v", err)
@@ -592,10 +608,6 @@ func (c *Controller) Rotate(content []byte) ([]byte, error) {
 	default:
 		return nil, fmt.Errorf("unexpected resource type: %s", s.GetObjectKind().GroupVersionKind().String())
 	}
-}
-
-func (c *Controller) attemptUnseal(ss *ssv1alpha1.SealedSecret) (*corev1.Secret, error) {
-	return attemptUnseal(ss, c.keyRegistry)
 }
 
 func attemptUnseal(ss *ssv1alpha1.SealedSecret, keyRegistry *KeyRegistry) (*corev1.Secret, error) {

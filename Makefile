@@ -107,6 +107,8 @@ $(eval $(call images,linux,arm))
 
 controller.yaml: controller.jsonnet controller-norbac.jsonnet schema-v1alpha1.yaml kube-fixes.libsonnet
 
+controller-leader-election.yaml: controller-leader-election.jsonnet controller.jsonnet controller-norbac.jsonnet schema-v1alpha1.yaml kube-fixes.libsonnet
+
 controller-norbac.yaml: controller-norbac.jsonnet schema-v1alpha1.yaml kube-fixes.libsonnet
 
 controller-podmonitor.yaml: controller.jsonnet controller-norbac.jsonnet schema-v1alpha1.yaml kube-fixes.libsonnet

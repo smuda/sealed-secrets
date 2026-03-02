@@ -321,6 +321,142 @@ func TestRotate(t *testing.T) {
 	}
 }
 
+func TestCheckSecret(t *testing.T) {
+	ns := "some-namespace"
+	clientset := fake.NewClientset()
+	keyRegistry := testKeyRegister(t, context.Background(), clientset, ns)
+
+	// Generate a key so the registry is not empty
+	validFor := time.Hour
+	cn := "my-cn"
+	_, err := keyRegistry.generateKey(context.Background(), validFor, cn, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	secret := &corev1.Secret{
+		TypeMeta: metav1.TypeMeta{
+			APIVersion: "v1",
+			Kind:       "Secret",
+		},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "ss",
+			Namespace: "default",
+		},
+		Data: map[string][]byte{
+			"password": []byte("temporal"),
+		},
+	}
+
+	cert, err := keyRegistry.getCert()
+	if err != nil {
+		t.Fatalf("error getting certificate: %v", err)
+	}
+
+	ssecret, err := ssv1alpha1.NewSealedSecret(scheme.Codecs, cert.PublicKey.(*rsa.PublicKey), secret)
+	if err != nil {
+		t.Fatalf("error creating sealed secrets: %v", err)
+	}
+
+	prettyEnc, err := prettyEncoder(scheme.Codecs, runtime.ContentTypeJSON, ssv1alpha1.SchemeGroupVersion)
+	if err != nil {
+		t.Fatalf("unexpected pretty encoding: %v", err)
+	}
+
+	data, err := runtime.Encode(prettyEnc, ssecret)
+	if err != nil {
+		t.Fatalf("unexpected encoding the sealed secret: %v", err)
+	}
+
+	// Test that a valid sealed secret can be checked
+	ok, err := checkSecret(data, keyRegistry)
+	if err != nil {
+		t.Fatalf("unexpected error checking secret: %v", err)
+	}
+	if !ok {
+		t.Fatalf("expected checkSecret to return true for a valid sealed secret")
+	}
+
+	// Test that invalid content returns false
+	ok, err = checkSecret([]byte(`{"apiVersion":"bitnami.com/v1alpha1","kind":"SealedSecret","metadata":{"name":"bad","namespace":"default"},"spec":{"encryptedData":{"password":"bm90LWVuY3J5cHRlZA=="}}}`), keyRegistry)
+	if err != nil {
+		t.Fatalf("unexpected error checking invalid secret: %v", err)
+	}
+	if ok {
+		t.Fatalf("expected checkSecret to return false for invalid content")
+	}
+}
+
+func TestRotateSecret(t *testing.T) {
+	ns := "some-namespace"
+	clientset := fake.NewClientset()
+	keyRegistry := testKeyRegister(t, context.Background(), clientset, ns)
+
+	// Add a second key so rotation produces different output
+	validFor := time.Hour
+	cn := "my-cn"
+	_, err := keyRegistry.generateKey(context.Background(), validFor, cn, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	secret := &corev1.Secret{
+		TypeMeta: metav1.TypeMeta{
+			APIVersion: "v1",
+			Kind:       "Secret",
+		},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "ss",
+			Namespace: "default",
+		},
+		Data: map[string][]byte{
+			"password": []byte("temporal"),
+		},
+	}
+
+	cert, err := keyRegistry.getCert()
+	if err != nil {
+		t.Fatalf("error getting certificate: %v", err)
+	}
+
+	ssecret, err := ssv1alpha1.NewSealedSecret(scheme.Codecs, cert.PublicKey.(*rsa.PublicKey), secret)
+	if err != nil {
+		t.Fatalf("error creating sealed secrets: %v", err)
+	}
+
+	prettyEnc, err := prettyEncoder(scheme.Codecs, runtime.ContentTypeYAML, ssv1alpha1.SchemeGroupVersion)
+	if err != nil {
+		t.Fatalf("unexpected pretty encoding: %v", err)
+	}
+
+	data, err := runtime.Encode(prettyEnc, ssecret)
+	if err != nil {
+		t.Fatalf("unexpected encoding the sealed secret: %v", err)
+	}
+
+	got, err := rotateSecret(data, keyRegistry)
+	if err != nil {
+		t.Fatalf("unexpected failure rotating secret: %v", err)
+	}
+	if string(got) == string(data) {
+		t.Fatalf("got %v want different from input", string(got))
+	}
+
+	// Verify the rotated secret can be unmarshalled and decrypted
+	s := &ssv1alpha1.SealedSecret{}
+	if err = json.Unmarshal(got, s); err != nil {
+		t.Fatalf("error unmarshalling the rotated sealed secret: %v", err)
+	}
+
+	unsealedSecret, err := attemptUnseal(s, keyRegistry)
+	if err != nil {
+		t.Fatalf("expected rotated secret to be decryptable, got: %v", err)
+	}
+	if string(unsealedSecret.Data["password"]) != "temporal" {
+		t.Fatalf("expected password to be 'temporal', got: %s", string(unsealedSecret.Data["password"]))
+	}
+}
+
 func TestRotateKeepScope(t *testing.T) {
 	ns := "some-namespace"
 	keyNs := "some-key-namespace"

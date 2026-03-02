@@ -59,10 +59,29 @@ func httpHealthServer() (*http.Server, *http.ServeMux) {
 	return &server, mux
 }
 
-// httpAddRoutes registers the core functionality routes on an existing mux: serving the
-// public key, secret rotation, and validation. These endpoints are designed to be accessible
+// httpAddCertRoute registers the certificate endpoint on an existing mux.
+// This is separated from httpAddRoutes so that all pods (including non-leaders)
+// can serve the public certificate, while only the leader serves verify/rotate.
+func httpAddCertRoute(mux *http.ServeMux, cp certProvider) {
+	mux.Handle("/v1/cert.pem", Instrument("/v1/cert.pem", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		certs, err := cp()
+		if err != nil {
+			slog.Error("cannot get certificates", "error", err)
+			http.Error(w, "cannot get certificate", http.StatusInternalServerError)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/x-pem-file")
+		for _, cert := range certs {
+			_, _ = w.Write(pem.EncodeToMemory(&pem.Block{Type: certUtil.CertificateBlockType, Bytes: cert.Raw}))
+		}
+	})))
+}
+
+// httpAddRoutes registers the leader-only routes on an existing mux: secret
+// rotation and validation. These endpoints are designed to be accessible
 // by all users of a given cluster. They must not leak any secret material.
-func httpAddRoutes(mux *http.ServeMux, cp certProvider, sc secretChecker, sr secretRotator, burst int, rate int) {
+func httpAddRoutes(mux *http.ServeMux, sc secretChecker, sr secretRotator, burst int, rate int) {
 	httpRateLimiter := rateLimiter(burst, rate)
 
 	mux.Handle("/v1/verify", Instrument("/v1/verify", httpRateLimiter.RateLimit(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -106,20 +125,6 @@ func httpAddRoutes(mux *http.ServeMux, cp certProvider, sc secretChecker, sr sec
 		w.WriteHeader(http.StatusOK)
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write(newSecret)
-	})))
-
-	mux.Handle("/v1/cert.pem", Instrument("/v1/cert.pem", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		certs, err := cp()
-		if err != nil {
-			slog.Error("cannot get certificates", "error", err)
-			http.Error(w, "cannot get certificate", http.StatusInternalServerError)
-			return
-		}
-
-		w.Header().Set("Content-Type", "application/x-pem-file")
-		for _, cert := range certs {
-			_, _ = w.Write(pem.EncodeToMemory(&pem.Block{Type: certUtil.CertificateBlockType, Bytes: cert.Raw}))
-		}
 	})))
 }
 
